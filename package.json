@@ -1,0 +1,23 @@
+{
+  "name": "undici-ratelimit-interceptor",
+  "version": "1.0.0",
+  "main": "index.js",
+  "directories": {
+    "lib": "lib"
+  },
+  "scripts": {
+    "test": "borp --coverage"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "borp": "^0.21.0",
+    "ioredis": "^5.8.1",
+    "undici": "^7.16.0"
+  },
+  "dependencies": {
+    "lru-cache": "^11.2.2"
+  }
+}
