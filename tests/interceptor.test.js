@@ -850,3 +850,142 @@ test('should include headers when includeHeaders is explicitly true', async (t) 
   assert.ok(response.headers['x-ratelimit-remaining'], 'Should have x-ratelimit-remaining header');
   assert.ok(response.headers['x-ratelimit-reset'], 'Should have x-ratelimit-reset header');
 });
+
+test('should handle getOldestTimestamp errors', async (t) => {
+  const InMemoryStore = require('../lib/store/memory');
+
+  // Mock getAll to throw an error
+  const originalGetAll = InMemoryStore.prototype.getAll;
+  InMemoryStore.prototype.getAll = async function() {
+    throw new Error('getAll failed');
+  };
+
+  t.after(() => {
+    InMemoryStore.prototype.getAll = originalGetAll;
+  });
+
+  const mockDispatch = (opts, handler) => {
+    handler.onHeaders(200, [], () => {});
+    handler.onData(Buffer.from('OK'));
+    handler.onComplete([]);
+  };
+
+  const interceptor = createRateLimiterInterceptor({
+    maxRequests: 5,
+    windowMs: 1000,
+    includeHeaders: true
+  });
+
+  const wrappedDispatch = interceptor(mockDispatch);
+
+  // Call the interceptor directly
+  try {
+    await wrappedDispatch(
+      { path: '/', method: 'GET', origin: 'http://localhost' },
+      {
+        onHeaders: () => {},
+        onData: () => {},
+        onComplete: () => {},
+        onError: (err) => {
+          throw err;
+        }
+      }
+    );
+    assert.fail('Should have thrown error');
+  } catch (err) {
+    assert.match(err.message, /getAll failed/, 'Should propagate getOldestTimestamp errors');
+  }
+});
+
+test('should calculate reset time when no requests exist (fallback path)', async (t) => {
+  const InMemoryStore = require('../lib/store/memory');
+
+  // Mock getAll to return empty array to simulate no requests
+  const originalGetAll = InMemoryStore.prototype.getAll;
+  let callCount = 0;
+  InMemoryStore.prototype.getAll = async function() {
+    callCount++;
+    // First call is for the identifier that was just recorded, return empty to trigger fallback
+    return [];
+  };
+
+  t.after(() => {
+    InMemoryStore.prototype.getAll = originalGetAll;
+  });
+
+  const server = http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end('OK');
+  });
+
+  await new Promise(resolve => server.listen(0, resolve));
+
+  t.after(() => server.close());
+
+  const dispatcher = new Agent().compose(
+    createRateLimiterInterceptor({
+      maxRequests: 5,
+      windowMs: 1000,
+      includeHeaders: true
+    })
+  );
+
+  setGlobalDispatcher(dispatcher);
+
+  const port = server.address().port;
+
+  // Make request - getAll will return empty, forcing the fallback reset calculation
+  const beforeRequest = Math.floor(Date.now() / 1000);
+  const response = await request(`http://localhost:${port}`);
+  const afterRequest = Math.floor(Date.now() / 1000);
+
+  assert.strictEqual(response.statusCode, 200);
+  assert.ok(response.headers['x-ratelimit-reset'], 'Should have x-ratelimit-reset header');
+
+  const resetTime = parseInt(response.headers['x-ratelimit-reset']);
+
+  // Reset time should be approximately now + windowMs (1 second)
+  assert.ok(resetTime >= beforeRequest, 'Reset time should be at least the time before request');
+  assert.ok(resetTime <= afterRequest + 2, 'Reset time should be within reasonable range');
+  assert.ok(callCount > 0, 'getAll should have been called');
+});
+
+test('should preserve onBodySent handler when present', async (t) => {
+  let onBodySentCalled = false;
+
+  const mockDispatch = (opts, handler) => {
+    // Simulate request/response flow
+    handler.onHeaders(200, [], () => {});
+    handler.onData(Buffer.from('OK'));
+    handler.onComplete([]);
+    // Call onBodySent if it exists
+    if (handler.onBodySent) {
+      handler.onBodySent();
+    }
+  };
+
+  const interceptor = createRateLimiterInterceptor({
+    maxRequests: 5,
+    windowMs: 1000,
+    includeHeaders: true
+  });
+
+  const wrappedDispatch = interceptor(mockDispatch);
+
+  await wrappedDispatch(
+    { path: '/', method: 'GET', origin: 'http://localhost' },
+    {
+      onHeaders: () => {},
+      onData: () => {},
+      onComplete: () => {},
+      onError: (err) => {
+        throw err;
+      },
+      onBodySent: () => {
+        onBodySentCalled = true;
+      }
+    }
+  );
+
+  assert.ok(onBodySentCalled, 'onBodySent should have been called');
+});
