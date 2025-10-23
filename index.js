@@ -6,7 +6,8 @@ class RateLimiterInterceptor {
     this.windowMs = options.windowMs || 60000;
     this.onRateLimitExceeded = options.onRateLimitExceeded;
     this.identifier = options.identifier; // Function to extract identifier from request
-    
+    this.includeHeaders = options.includeHeaders !== undefined ? options.includeHeaders : true;
+
     // Setup stores
     this.memoryStore = new InMemoryStore({
       max: options.maxIdentifiers || 10000,
@@ -76,12 +77,46 @@ class RateLimiterInterceptor {
       throw err;
     }
   }
+
+  async getOldestTimestamp(identifier) {
+    const store = await this.getStore();
+    try {
+      const requests = await store.getAll(identifier);
+      if (!requests || requests.length === 0) {
+        return null;
+      }
+      return Math.min(...requests);
+    } catch (err) {
+      throw err;
+    }
+  }
+
+  async getRateLimitInfo(identifier) {
+    const currentCount = await this.getCurrentCount(identifier);
+    const remaining = Math.max(0, this.maxRequests - currentCount);
+
+    // Calculate reset time based on oldest request + window duration
+    const oldestTimestamp = await this.getOldestTimestamp(identifier);
+    let reset;
+    if (oldestTimestamp) {
+      reset = Math.ceil((oldestTimestamp + this.windowMs) / 1000);
+    } else {
+      // If no requests yet, reset is current time + window
+      reset = Math.ceil((Date.now() + this.windowMs) / 1000);
+    }
+
+    return {
+      limit: this.maxRequests,
+      remaining,
+      reset
+    };
+  }
 }
 
 function createRateLimiterInterceptor(options) {
       return dispatch => {
     const interceptor = new RateLimiterInterceptor(options);
-    
+
     return (opts, handler) => {
       // Extract identifier from request using default or custom function
       const identifier = interceptor.getRequestIdentifier(opts);
@@ -89,10 +124,10 @@ function createRateLimiterInterceptor(options) {
       // Wrap in async context
       const checkRateLimit = async () => {
         const limited = await interceptor.isRateLimited(identifier);
-        
+
         if (limited) {
           const currentCount = await interceptor.getCurrentCount(identifier);
-          
+
           if (interceptor.onRateLimitExceeded) {
             interceptor.onRateLimitExceeded({
               maxRequests: interceptor.maxRequests,
@@ -113,6 +148,51 @@ function createRateLimiterInterceptor(options) {
         }
 
         await interceptor.recordRequest(identifier);
+
+        // Only add headers if includeHeaders is enabled
+        if (interceptor.includeHeaders) {
+          // Get rate limit info after recording the request
+          const rateLimitInfo = await interceptor.getRateLimitInfo(identifier);
+
+          // Create a wrapped handler that extends handler behavior and overrides onHeaders
+          // Note: We explicitly define only the methods that exist to satisfy undici's strict validation
+          const wrappedHandler = {
+            onError: (...args) => handler.onError(...args),
+            onData: (...args) => handler.onData(...args),
+            onComplete: (...args) => handler.onComplete(...args),
+            onHeaders: (statusCode, headers, resume, statusText) => {
+              // Add rate limit headers
+              const rateLimitHeaders = [
+                Buffer.from('x-ratelimit-limit'),
+                Buffer.from(String(rateLimitInfo.limit)),
+                Buffer.from('x-ratelimit-remaining'),
+                Buffer.from(String(rateLimitInfo.remaining)),
+                Buffer.from('x-ratelimit-reset'),
+                Buffer.from(String(rateLimitInfo.reset))
+              ];
+
+              // Combine existing headers with rate limit headers
+              const combinedHeaders = [...headers, ...rateLimitHeaders];
+
+              return handler.onHeaders(statusCode, combinedHeaders, resume, statusText);
+            }
+          };
+
+          // Add optional handler methods if they exist
+          if (handler.onConnect) {
+            wrappedHandler.onConnect = (...args) => handler.onConnect(...args);
+          }
+          if (handler.onUpgrade) {
+            wrappedHandler.onUpgrade = (...args) => handler.onUpgrade(...args);
+          }
+          if (handler.onBodySent) {
+            wrappedHandler.onBodySent = (...args) => handler.onBodySent(...args);
+          }
+
+          return dispatch(opts, wrappedHandler);
+        }
+
+        // If headers are disabled, dispatch normally
         return dispatch(opts, handler);
       };
 

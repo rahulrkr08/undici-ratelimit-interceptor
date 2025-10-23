@@ -9,6 +9,7 @@ A lightweight, production-ready rate limiter interceptor for [Undici](https://gi
 - 💾 **LRU Cache Storage** - Efficient memory management with automatic eviction
 - ⚡ **High Performance** - Minimal overhead with O(1) lookups
 - 📊 **Flexible Windows** - Sliding window rate limiting
+- 📋 **Rate Limit Headers** - Automatic response headers (X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset)
 
 ## Installation
 
@@ -171,6 +172,7 @@ identifier: (opts) => {
 | `maxIdentifiers` | number | 10000 | Max unique identifiers to track in memory |
 | `identifier` | function | null | Custom function to extract identifier from request |
 | `onRateLimitExceeded` | function | null | Callback when rate limit is exceeded |
+| `includeHeaders` | boolean | true | Include rate limit headers in responses (X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset) |
 
 ### Error Handling
 
@@ -192,6 +194,36 @@ identifier: (opts) => {
   currentRequests: 101,
   identifier: 'GET:https://api.example.com:/users'
 }
+```
+
+### Rate Limit Headers
+
+When `includeHeaders` is enabled (default: `true`), the following headers are automatically added to all responses:
+
+| Header | Description | Example |
+|--------|-------------|---------|
+| `X-RateLimit-Limit` | Maximum number of requests allowed in the time window | `100` |
+| `X-RateLimit-Remaining` | Number of requests remaining in the current window | `42` |
+| `X-RateLimit-Reset` | Unix timestamp (seconds) when the rate limit window resets | `1634567890` |
+
+**Example Response Headers:**
+```
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 42
+X-RateLimit-Reset: 1634567890
+```
+
+The reset time is calculated based on the oldest request in the current window plus the window duration. This provides accurate information about when the rate limit will reset.
+
+**Disabling Headers:**
+```javascript
+const client = new Agent().compose(
+  createRateLimiterInterceptor({
+    maxRequests: 100,
+    windowMs: 60000,
+    includeHeaders: false // Disable rate limit headers
+  })
+);
 ```
 
 ### Memory Management
@@ -254,6 +286,47 @@ setGlobalDispatcher(
 // Now all undici requests use the rate limiter
 const { request } = require('undici');
 await request('https://api.example.com/data');
+```
+
+### Using Rate Limit Headers
+
+```javascript
+const { Agent, request } = require('undici');
+const createRateLimiterInterceptor = require('undici-rate-limiter-interceptor');
+
+const client = new Agent().compose(
+  createRateLimiterInterceptor({
+    maxRequests: 10,
+    windowMs: 60000,
+    includeHeaders: true // Default: true
+  })
+);
+
+// Make a request and check rate limit headers
+const response = await request('https://api.example.com/data', {
+  dispatcher: client
+});
+
+console.log('Rate Limit:', response.headers['x-ratelimit-limit']); // "10"
+console.log('Remaining:', response.headers['x-ratelimit-remaining']); // "9"
+console.log('Reset:', response.headers['x-ratelimit-reset']); // Unix timestamp
+
+// Calculate time until reset
+const resetTime = parseInt(response.headers['x-ratelimit-reset']);
+const secondsUntilReset = resetTime - Math.floor(Date.now() / 1000);
+console.log(`Rate limit resets in ${secondsUntilReset} seconds`);
+```
+
+### Disabling Rate Limit Headers
+
+```javascript
+const client = new Agent().compose(
+  createRateLimiterInterceptor({
+    maxRequests: 100,
+    windowMs: 60000,
+    includeHeaders: false // Disable headers for minimal overhead
+  })
+);
 ```
 
 ## Testing

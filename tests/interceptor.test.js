@@ -641,10 +641,10 @@ test('should handle store add errors', async (t) => {
 
 test('should handle getCurrentCount errors', async (t) => {
   const InMemoryStore = require('../lib/store/memory');
-  
+
   let callCount = 0;
   const originalCount = InMemoryStore.prototype.count;
-  
+
   // Mock count to fail on second call (first succeeds for isRateLimited check)
   InMemoryStore.prototype.count = async function() {
     callCount++;
