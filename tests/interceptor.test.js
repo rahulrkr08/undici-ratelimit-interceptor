@@ -757,3 +757,96 @@ test('should update remaining count in headers', async (t) => {
       `Request ${i + 1}: Remaining should be ${expectedRemaining}`);
   }
 });
+
+test('should exclude headers when includeHeaders is false', async (t) => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end('OK');
+  });
+
+  await new Promise(resolve => server.listen(0, resolve));
+
+  t.after(() => server.close());
+
+  const dispatcher = new Agent().compose(
+    createRateLimiterInterceptor({
+      maxRequests: 5,
+      windowMs: 1000,
+      includeHeaders: false
+    })
+  );
+
+  setGlobalDispatcher(dispatcher);
+
+  const port = server.address().port;
+
+  // Make request and verify no rate limit headers
+  const response = await request(`http://localhost:${port}`);
+
+  assert.strictEqual(response.statusCode, 200);
+  assert.strictEqual(response.headers['x-ratelimit-limit'], undefined, 'Should not have x-ratelimit-limit header');
+  assert.strictEqual(response.headers['x-ratelimit-remaining'], undefined, 'Should not have x-ratelimit-remaining header');
+  assert.strictEqual(response.headers['x-ratelimit-reset'], undefined, 'Should not have x-ratelimit-reset header');
+});
+
+test('should include headers by default when includeHeaders is not specified', async (t) => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end('OK');
+  });
+
+  await new Promise(resolve => server.listen(0, resolve));
+
+  t.after(() => server.close());
+
+  const dispatcher = new Agent().compose(
+    createRateLimiterInterceptor({
+      maxRequests: 5,
+      windowMs: 1000
+      // includeHeaders not specified, should default to true
+    })
+  );
+
+  setGlobalDispatcher(dispatcher);
+
+  const port = server.address().port;
+
+  // Make request and verify headers are present
+  const response = await request(`http://localhost:${port}`);
+
+  assert.strictEqual(response.statusCode, 200);
+  assert.ok(response.headers['x-ratelimit-limit'], 'Should have x-ratelimit-limit header by default');
+  assert.ok(response.headers['x-ratelimit-remaining'], 'Should have x-ratelimit-remaining header by default');
+  assert.ok(response.headers['x-ratelimit-reset'], 'Should have x-ratelimit-reset header by default');
+});
+
+test('should include headers when includeHeaders is explicitly true', async (t) => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end('OK');
+  });
+
+  await new Promise(resolve => server.listen(0, resolve));
+
+  t.after(() => server.close());
+
+  const dispatcher = new Agent().compose(
+    createRateLimiterInterceptor({
+      maxRequests: 5,
+      windowMs: 1000,
+      includeHeaders: true
+    })
+  );
+
+  setGlobalDispatcher(dispatcher);
+
+  const port = server.address().port;
+
+  // Make request and verify headers are present
+  const response = await request(`http://localhost:${port}`);
+
+  assert.strictEqual(response.statusCode, 200);
+  assert.ok(response.headers['x-ratelimit-limit'], 'Should have x-ratelimit-limit header');
+  assert.ok(response.headers['x-ratelimit-remaining'], 'Should have x-ratelimit-remaining header');
+  assert.ok(response.headers['x-ratelimit-reset'], 'Should have x-ratelimit-reset header');
+});

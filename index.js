@@ -6,7 +6,8 @@ class RateLimiterInterceptor {
     this.windowMs = options.windowMs || 60000;
     this.onRateLimitExceeded = options.onRateLimitExceeded;
     this.identifier = options.identifier; // Function to extract identifier from request
-    
+    this.includeHeaders = options.includeHeaders !== undefined ? options.includeHeaders : true;
+
     // Setup stores
     this.memoryStore = new InMemoryStore({
       max: options.maxIdentifiers || 10000,
@@ -148,36 +149,42 @@ function createRateLimiterInterceptor(options) {
 
         await interceptor.recordRequest(identifier);
 
-        // Get rate limit info after recording the request
-        const rateLimitInfo = await interceptor.getRateLimitInfo(identifier);
+        // Only add headers if includeHeaders is enabled
+        if (interceptor.includeHeaders) {
+          // Get rate limit info after recording the request
+          const rateLimitInfo = await interceptor.getRateLimitInfo(identifier);
 
-        // Create a wrapped handler that adds rate limit headers
-        const wrappedHandler = {
-          onConnect: handler.onConnect ? (...args) => handler.onConnect(...args) : undefined,
-          onError: (...args) => handler.onError(...args),
-          onUpgrade: handler.onUpgrade ? (...args) => handler.onUpgrade(...args) : undefined,
-          onHeaders: (statusCode, headers, resume, statusText) => {
-            // Add rate limit headers
-            const rateLimitHeaders = [
-              Buffer.from('x-ratelimit-limit'),
-              Buffer.from(String(rateLimitInfo.limit)),
-              Buffer.from('x-ratelimit-remaining'),
-              Buffer.from(String(rateLimitInfo.remaining)),
-              Buffer.from('x-ratelimit-reset'),
-              Buffer.from(String(rateLimitInfo.reset))
-            ];
+          // Create a wrapped handler that adds rate limit headers
+          const wrappedHandler = {
+            onConnect: handler.onConnect ? (...args) => handler.onConnect(...args) : undefined,
+            onError: (...args) => handler.onError(...args),
+            onUpgrade: handler.onUpgrade ? (...args) => handler.onUpgrade(...args) : undefined,
+            onHeaders: (statusCode, headers, resume, statusText) => {
+              // Add rate limit headers
+              const rateLimitHeaders = [
+                Buffer.from('x-ratelimit-limit'),
+                Buffer.from(String(rateLimitInfo.limit)),
+                Buffer.from('x-ratelimit-remaining'),
+                Buffer.from(String(rateLimitInfo.remaining)),
+                Buffer.from('x-ratelimit-reset'),
+                Buffer.from(String(rateLimitInfo.reset))
+              ];
 
-            // Combine existing headers with rate limit headers
-            const combinedHeaders = [...headers, ...rateLimitHeaders];
+              // Combine existing headers with rate limit headers
+              const combinedHeaders = [...headers, ...rateLimitHeaders];
 
-            return handler.onHeaders(statusCode, combinedHeaders, resume, statusText);
-          },
-          onData: (...args) => handler.onData(...args),
-          onComplete: (...args) => handler.onComplete(...args),
-          onBodySent: handler.onBodySent ? (...args) => handler.onBodySent(...args) : undefined
-        };
+              return handler.onHeaders(statusCode, combinedHeaders, resume, statusText);
+            },
+            onData: (...args) => handler.onData(...args),
+            onComplete: (...args) => handler.onComplete(...args),
+            onBodySent: handler.onBodySent ? (...args) => handler.onBodySent(...args) : undefined
+          };
 
-        return dispatch(opts, wrappedHandler);
+          return dispatch(opts, wrappedHandler);
+        }
+
+        // If headers are disabled, dispatch normally
+        return dispatch(opts, handler);
       };
 
       return checkRateLimit();
