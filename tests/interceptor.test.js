@@ -989,3 +989,189 @@ test('should preserve onBodySent handler when present', async (t) => {
 
   assert.ok(onBodySentCalled, 'onBodySent should have been called');
 });
+
+test('should preserve onConnect handler when present', async (t) => {
+  let onConnectCalled = false;
+
+  const mockDispatch = (opts, handler) => {
+    // Call onConnect if it exists
+    if (handler.onConnect) {
+      handler.onConnect();
+    }
+    // Simulate request/response flow
+    handler.onHeaders(200, [], () => {});
+    handler.onData(Buffer.from('OK'));
+    handler.onComplete([]);
+  };
+
+  const interceptor = createRateLimiterInterceptor({
+    maxRequests: 5,
+    windowMs: 1000,
+    includeHeaders: true
+  });
+
+  const wrappedDispatch = interceptor(mockDispatch);
+
+  await wrappedDispatch(
+    { path: '/', method: 'GET', origin: 'http://localhost' },
+    {
+      onHeaders: () => {},
+      onData: () => {},
+      onComplete: () => {},
+      onError: (err) => {
+        throw err;
+      },
+      onConnect: () => {
+        onConnectCalled = true;
+      }
+    }
+  );
+
+  assert.ok(onConnectCalled, 'onConnect should have been called');
+});
+
+test('should preserve onUpgrade handler when present', async (t) => {
+  let onUpgradeCalled = false;
+
+  const mockDispatch = (opts, handler) => {
+    // Call onUpgrade if it exists
+    if (handler.onUpgrade) {
+      handler.onUpgrade(101, []);
+    }
+    // Note: onUpgrade typically replaces normal flow, but for testing we'll also call the others
+    handler.onHeaders(200, [], () => {});
+    handler.onData(Buffer.from('OK'));
+    handler.onComplete([]);
+  };
+
+  const interceptor = createRateLimiterInterceptor({
+    maxRequests: 5,
+    windowMs: 1000,
+    includeHeaders: true
+  });
+
+  const wrappedDispatch = interceptor(mockDispatch);
+
+  await wrappedDispatch(
+    { path: '/', method: 'GET', origin: 'http://localhost' },
+    {
+      onHeaders: () => {},
+      onData: () => {},
+      onComplete: () => {},
+      onError: (err) => {
+        throw err;
+      },
+      onUpgrade: (statusCode, headers) => {
+        onUpgradeCalled = true;
+        assert.strictEqual(statusCode, 101);
+      }
+    }
+  );
+
+  assert.ok(onUpgradeCalled, 'onUpgrade should have been called');
+});
+
+test('should properly wrap and call onError handler', async (t) => {
+  let onErrorCalled = false;
+  const testError = new Error('Test error');
+
+  const mockDispatch = (opts, handler) => {
+    // Simulate an error from the backend
+    handler.onError(testError);
+  };
+
+  const interceptor = createRateLimiterInterceptor({
+    maxRequests: 5,
+    windowMs: 1000,
+    includeHeaders: true
+  });
+
+  const wrappedDispatch = interceptor(mockDispatch);
+
+  await wrappedDispatch(
+    { path: '/', method: 'GET', origin: 'http://localhost' },
+    {
+      onHeaders: () => {},
+      onData: () => {},
+      onComplete: () => {},
+      onError: (err) => {
+        onErrorCalled = true;
+        assert.strictEqual(err, testError);
+      }
+    }
+  );
+
+  assert.ok(onErrorCalled, 'onError should have been called');
+});
+
+test('should properly wrap and call onData handler', async (t) => {
+  let onDataCalled = false;
+  const testData = Buffer.from('test data');
+
+  const mockDispatch = (opts, handler) => {
+    handler.onHeaders(200, [], () => {});
+    handler.onData(testData);
+    handler.onComplete([]);
+  };
+
+  const interceptor = createRateLimiterInterceptor({
+    maxRequests: 5,
+    windowMs: 1000,
+    includeHeaders: true
+  });
+
+  const wrappedDispatch = interceptor(mockDispatch);
+
+  await wrappedDispatch(
+    { path: '/', method: 'GET', origin: 'http://localhost' },
+    {
+      onHeaders: () => {},
+      onData: (chunk) => {
+        onDataCalled = true;
+        assert.strictEqual(chunk, testData);
+      },
+      onComplete: () => {},
+      onError: (err) => {
+        throw err;
+      }
+    }
+  );
+
+  assert.ok(onDataCalled, 'onData should have been called');
+});
+
+test('should properly wrap and call onComplete handler', async (t) => {
+  let onCompleteCalled = false;
+  const testTrailers = ['x-test', 'value'];
+
+  const mockDispatch = (opts, handler) => {
+    handler.onHeaders(200, [], () => {});
+    handler.onData(Buffer.from('OK'));
+    handler.onComplete(testTrailers);
+  };
+
+  const interceptor = createRateLimiterInterceptor({
+    maxRequests: 5,
+    windowMs: 1000,
+    includeHeaders: true
+  });
+
+  const wrappedDispatch = interceptor(mockDispatch);
+
+  await wrappedDispatch(
+    { path: '/', method: 'GET', origin: 'http://localhost' },
+    {
+      onHeaders: () => {},
+      onData: () => {},
+      onComplete: (trailers) => {
+        onCompleteCalled = true;
+        assert.deepStrictEqual(trailers, testTrailers);
+      },
+      onError: (err) => {
+        throw err;
+      }
+    }
+  );
+
+  assert.ok(onCompleteCalled, 'onComplete should have been called');
+});
