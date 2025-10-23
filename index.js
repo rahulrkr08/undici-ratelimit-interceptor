@@ -13,7 +13,7 @@ class RateLimiterInterceptor {
     if (options.redis) {
       // Use Redis store if redis client is provided
       this.store = new RedisStore(options.redis, {
-        keyPrefix: options.redisKeyPrefix || 'ratelimit:',
+        keyPrefix: options.redisKeyPrefix,
         ttl: Math.ceil(options.windowMs / 1000) * 2 // Convert to seconds, keep for 2x window
       });
     } else {

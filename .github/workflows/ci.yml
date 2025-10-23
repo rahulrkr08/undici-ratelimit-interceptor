@@ -8,17 +8,43 @@ on:
     paths-ignore:
       - '*.md'
 
+concurrency:
+  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
+  cancel-in-progress: true
+
 jobs:
   test:
-    name: Test Node.js ${{ matrix.node-version }} on ${{ matrix.os }}
+    name: Test Node.js ${{ matrix.node-version }} on ${{ matrix.os }}  ${{ matrix.redis.name }}
     runs-on: ${{ matrix.os }}
     
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         node-version: [20, 22, 24]
+        redis:
+          - name: "Redis 7.2"
+            image: "redis:7.2-alpine"
+          - name: "Redis 7.4"
+            image: "redis:7.4-alpine"
+          - name: "Redis 8.2"
+            image: "redis:8.2.1-alpine"
+          - name: "Valkey 8.0"
+            image: "valkey/valkey:8.0-alpine"
+          - name: "Valkey 8.1"
+            image: "valkey/valkey:8.1-alpine"
       fail-fast: false
-    
+
+    services:
+      redis:
+        image: ${{ matrix.redis.image }}
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping 2>/dev/null || valkey-cli ping 2>/dev/null || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v5

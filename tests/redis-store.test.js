@@ -290,17 +290,17 @@ test('RedisStore - handles many timestamps and cleanup', async () => {
 
   // Add many timestamps
   for (let i = 0; i < 20; i++) {
-    await store.add(now + (i * 100), 'stress-test');
+    await store.add(now + (i * 100), 'debug');
   }
   
-  const count = await store.count('stress-test');
+  const count = await store.count('debug');
   assert.ok(count === 20, `Should have 20 timestamps, got ${count}`);
 
   // Cleanup old ones
   const cutoff = now + 1000;
-  await store.cleanup(cutoff, 'stress-test');
+  await store.cleanup(cutoff, 'debug');
 
-  const afterCleanup = await store.count('stress-test');
+  const afterCleanup = await store.count('debug');
   assert.ok(afterCleanup < count, 'Should have fewer timestamps after cleanup');
 });
 
