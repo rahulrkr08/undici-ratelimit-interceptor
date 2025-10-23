@@ -641,10 +641,10 @@ test('should handle store add errors', async (t) => {
 
 test('should handle getCurrentCount errors', async (t) => {
   const InMemoryStore = require('../lib/store/memory');
-  
+
   let callCount = 0;
   const originalCount = InMemoryStore.prototype.count;
-  
+
   // Mock count to fail on second call (first succeeds for isRateLimited check)
   InMemoryStore.prototype.count = async function() {
     callCount++;
@@ -688,5 +688,72 @@ test('should handle getCurrentCount errors', async (t) => {
   } catch (err) {
     assert.ok(callCount > 1, 'Count should have been called multiple times');
     assert.match(err.message, /Count failed on getCurrentCount/, 'Should propagate getCurrentCount errors');
+  }
+});
+
+test('should include rate limit headers in response', async (t) => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end('OK');
+  });
+
+  await new Promise(resolve => server.listen(0, resolve));
+
+  t.after(() => server.close());
+
+  const dispatcher = new Agent().compose(
+    createRateLimiterInterceptor({
+      maxRequests: 5,
+      windowMs: 1000
+    })
+  );
+
+  setGlobalDispatcher(dispatcher);
+
+  const port = server.address().port;
+
+  // Make first request and check headers
+  const response = await request(`http://localhost:${port}`);
+
+  assert.strictEqual(response.statusCode, 200);
+  assert.ok(response.headers['x-ratelimit-limit'], 'Should have x-ratelimit-limit header');
+  assert.ok(response.headers['x-ratelimit-remaining'], 'Should have x-ratelimit-remaining header');
+  assert.ok(response.headers['x-ratelimit-reset'], 'Should have x-ratelimit-reset header');
+
+  assert.strictEqual(response.headers['x-ratelimit-limit'], '5', 'Limit should be 5');
+  assert.strictEqual(response.headers['x-ratelimit-remaining'], '4', 'Remaining should be 4 after first request');
+
+  const resetTime = parseInt(response.headers['x-ratelimit-reset']);
+  assert.ok(resetTime > Math.floor(Date.now() / 1000), 'Reset time should be in the future');
+});
+
+test('should update remaining count in headers', async (t) => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end('OK');
+  });
+
+  await new Promise(resolve => server.listen(0, resolve));
+
+  t.after(() => server.close());
+
+  const dispatcher = new Agent().compose(
+    createRateLimiterInterceptor({
+      maxRequests: 3,
+      windowMs: 1000
+    })
+  );
+
+  setGlobalDispatcher(dispatcher);
+
+  const port = server.address().port;
+
+  // Make 3 requests and check remaining decreases
+  for (let i = 0; i < 3; i++) {
+    const response = await request(`http://localhost:${port}`);
+    const expectedRemaining = 3 - i - 1;
+
+    assert.strictEqual(response.headers['x-ratelimit-remaining'], String(expectedRemaining),
+      `Request ${i + 1}: Remaining should be ${expectedRemaining}`);
   }
 });
