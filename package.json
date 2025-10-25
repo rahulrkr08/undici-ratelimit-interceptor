@@ -6,12 +6,13 @@
     "lib": "lib"
   },
   "scripts": {
-    "test": "borp --coverage"
+    "test": "borp --coverage --concurrency 1",
+    "redis": "docker run --rm -d -p 6379:6379 --name redis-ratelimit redis redis-server"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "author": "rahulrkr@hotmail.com",
+  "license": "MIT",
+  "description": "A rate limit interceptor for undici HTTP client",
   "devDependencies": {
     "borp": "^0.21.0",
     "ioredis": "^5.8.1",

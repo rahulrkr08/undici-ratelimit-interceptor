@@ -1,6 +1,6 @@
 # Undici Rate Limiter Interceptor
 
-A lightweight, production-ready rate limiter interceptor for [Undici](https://github.com/nodejs/undici) HTTP client with in-memory storage using LRU cache.
+A lightweight, production-ready rate limiter interceptor for [Undici](https://github.com/nodejs/undici) HTTP client with in-memory storage using LRU cach and Redis.
 
 ## Features
 
@@ -63,44 +63,6 @@ npm install undici-rate-limiter-interceptor
 ```
 
 ### Components
-
-#### 1. **Rate Limiter Interceptor**
-The main interceptor that wraps Undici's dispatch function.
-
-**Responsibilities:**
-- Extract request identifier (default or custom)
-- Check if request should be rate limited
-- Record successful requests
-- Return 429 error when rate limit exceeded
-
-**Key Methods:**
-- `getRequestIdentifier(opts)` - Determines the identifier for the request
-- `isRateLimited(identifier)` - Checks if the identifier has exceeded limits
-- `recordRequest(identifier)` - Records a successful request
-- `cleanupOldRequests(store, identifier)` - Removes expired timestamps
-
-#### 2. **InMemoryStore**
-LRU cache-based storage for tracking request timestamps per identifier.
-
-**Data Structure:**
-```javascript
-{
-  "GET:https://api.example.com:/users": [1634567890000, 1634567891000, ...],
-  "POST:https://api.example.com:/posts": [1634567892000, ...],
-  "user:12345": [1634567893000, 1634567894000, ...]
-}
-```
-
-**Features:**
-- **LRU Eviction**: Automatically removes least recently used identifiers when cache is full
-- **TTL Support**: Entries expire after configured time (default: 2x window duration)
-- **Memory Efficient**: Configurable max identifiers (default: 10,000)
-
-**Key Methods:**
-- `add(timestamp, identifier)` - Add a request timestamp
-- `cleanup(cutoff, identifier)` - Remove timestamps older than cutoff
-- `count(identifier)` - Count current requests for identifier
-- `getAll(identifier)` - Get all timestamps for identifier
 
 ### Rate Limiting Algorithm
 
@@ -186,16 +148,6 @@ identifier: (opts) => {
 }
 ```
 
-**Callback Data:**
-```javascript
-{
-  maxRequests: 100,
-  windowMs: 60000,
-  currentRequests: 101,
-  identifier: 'GET:https://api.example.com:/users'
-}
-```
-
 ### Rate Limit Headers
 
 When `includeHeaders` is enabled (default: `true`), the following headers are automatically added to all responses:
@@ -225,14 +177,6 @@ const client = new Agent().compose(
   })
 );
 ```
-
-### Memory Management
-
-**LRU Cache Strategy:**
-- Tracks up to `maxIdentifiers` unique identifiers (default: 10,000)
-- When cache is full, evicts least recently used identifiers
-- TTL set to 2x window duration to ensure data persistence
-- Automatic cleanup of expired timestamps
 
 ## Usage Examples
 
@@ -288,58 +232,106 @@ const { request } = require('undici');
 await request('https://api.example.com/data');
 ```
 
-### Using Rate Limit Headers
+## Redis
+
+### Basic Example
 
 ```javascript
-const { Agent, request } = require('undici');
-const createRateLimiterInterceptor = require('undici-rate-limiter-interceptor');
+const Redis = require('ioredis');
+const { Agent } = require('undici');
+const createRateLimiterInterceptor = require('undici-ratelimit-interceptor');
 
-const client = new Agent().compose(
-  createRateLimiterInterceptor({
-    maxRequests: 10,
-    windowMs: 60000,
-    includeHeaders: true // Default: true
-  })
-);
-
-// Make a request and check rate limit headers
-const response = await request('https://api.example.com/data', {
-  dispatcher: client
+// Create Redis client
+const redis = new Redis({
+  host: 'localhost',
+  port: 6379
 });
 
-console.log('Rate Limit:', response.headers['x-ratelimit-limit']); // "10"
-console.log('Remaining:', response.headers['x-ratelimit-remaining']); // "9"
-console.log('Reset:', response.headers['x-ratelimit-reset']); // Unix timestamp
-
-// Calculate time until reset
-const resetTime = parseInt(response.headers['x-ratelimit-reset']);
-const secondsUntilReset = resetTime - Math.floor(Date.now() / 1000);
-console.log(`Rate limit resets in ${secondsUntilReset} seconds`);
-```
-
-### Disabling Rate Limit Headers
-
-```javascript
-const client = new Agent().compose(
+// Create rate limiter with Redis store
+const agent = new Agent().compose(
   createRateLimiterInterceptor({
+    redis: redis,                    // Pass Redis client
+    redisKeyPrefix: 'myapp:limit:',  // Optional: custom key prefix
     maxRequests: 100,
-    windowMs: 60000,
-    includeHeaders: false // Disable headers for minimal overhead
+    windowMs: 60000
   })
 );
+
+// Use the agent for requests
+const { request } = require('undici');
+const response = await request('https://api.example.com', {
+  dispatcher: agent
+});
 ```
 
-## Testing
+### Configuration Options
 
-```bash
-# Run tests
-npm test
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `redis` | Redis | - | **Required**. ioredis client instance |
+| `redisKeyPrefix` | string | `'ratelimit:'` | Prefix for Redis keys |
+| `maxRequests` | number | `100` | Maximum requests per window |
+| `windowMs` | number | `60000` | Time window in milliseconds |
+| `includeHeaders` | boolean | `true` | Include rate limit headers in responses |
+| `identifier` | function | - | Custom function to extract identifier from request |
+| `onRateLimitExceeded` | function | - | Callback when rate limit is exceeded |
+
+### Performance Considerations
+
+### Redis Connection
+
+Use a single Redis client instance and reuse it across all interceptors:
+
+```javascript
+// Good: Reuse Redis client
+const redis = new Redis();
+const interceptor1 = createRateLimiterInterceptor({ redis, ... });
+const interceptor2 = createRateLimiterInterceptor({ redis, ... });
+
+// Bad: Create multiple clients
+const interceptor1 = createRateLimiterInterceptor({ redis: new Redis(), ... });
+const interceptor2 = createRateLimiterInterceptor({ redis: new Redis(), ... });
 ```
+
+### Connection Pooling
+
+For high-traffic applications, consider using Redis Cluster or connection pooling:
+
+```javascript
+const Redis = require('ioredis');
+
+const redis = new Redis.Cluster([
+  { host: 'redis-1', port: 6379 },
+  { host: 'redis-2', port: 6379 },
+  { host: 'redis-3', port: 6379 }
+]);
+```
+
+### Memory Usage
+
+The Redis store automatically cleans up old timestamps, but you can manually clear data:
+
+```javascript
+const RedisStore = require('undici-ratelimit-interceptor/lib/store/redis');
+const store = new RedisStore(redis, { keyPrefix: 'myapp:' });
+
+// Clear specific identifier
+await store.clear('GET:http://api.com:/users');
+
+// Clear all rate limit data
+await store.clearAll();
+```
+
+## Comparison: Memory Store vs Redis Store
+
+| Feature | Memory Store | Redis Store |
+|---------|-------------|-------------|
+| **Distributed** | ❌ No | ✅ Yes |
+| **Persistent** | ❌ No | ✅ Yes |
+| **Performance** | ⚡ Fastest | 🚀 Fast |
+| **Setup** | None | Requires Redis |
+| **Best For** | Single process | Multiple processes/servers |
 
 ## License
 
 MIT
-
-## Contributing
-
-Contributions are welcome! Please open an issue or submit a pull request.

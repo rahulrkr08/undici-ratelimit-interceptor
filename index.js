@@ -1,4 +1,5 @@
 const InMemoryStore = require("./lib/store/memory");
+const RedisStore = require("./lib/store/redis");
 
 class RateLimiterInterceptor {
   constructor(options = {}) {
@@ -9,14 +10,23 @@ class RateLimiterInterceptor {
     this.includeHeaders = options.includeHeaders !== undefined ? options.includeHeaders : true;
 
     // Setup stores
-    this.memoryStore = new InMemoryStore({
-      max: options.maxIdentifiers || 10000,
-      ttl: options.windowMs * 2 // Keep entries for 2x the window duration
-    });
+    if (options.redis) {
+      // Use Redis store if redis client is provided
+      this.store = new RedisStore(options.redis, {
+        keyPrefix: options.redisKeyPrefix,
+        ttl: Math.ceil(options.windowMs / 1000) * 2 // Convert to seconds, keep for 2x window
+      });
+    } else {
+      // Fall back to memory store
+      this.store = new InMemoryStore({
+        max: options.maxIdentifiers || 10000,
+        ttl: options.windowMs * 2 // Keep entries for 2x the window duration
+      });
+    }
   }
 
   async getStore() {
-    return this.memoryStore;
+    return this.store;
   }
 
   async cleanupOldRequests(store, identifier) {
@@ -144,6 +154,7 @@ function createRateLimiterInterceptor(options) {
           error.statusCode = 429;
           error.identifier = identifier;
 
+          // Use error handling method
           return handler.onError(error);
         }
 
@@ -154,12 +165,12 @@ function createRateLimiterInterceptor(options) {
           // Get rate limit info after recording the request
           const rateLimitInfo = await interceptor.getRateLimitInfo(identifier);
 
-          // Create a wrapped handler that extends handler behavior and overrides onHeaders
-          // Note: We explicitly define only the methods that exist to satisfy undici's strict validation
+          // Create a wrapped handler
           const wrappedHandler = {
-            onError: (...args) => handler.onError(...args),
-            onData: (...args) => handler.onData(...args),
-            onComplete: (...args) => handler.onComplete(...args),
+            onConnect: (...args) => handler.onConnect?.(...args),
+            onError: (...args) => handler.onError?.(...args),
+            onUpgrade: (...args) => handler.onUpgrade?.(...args),
+            onBodySent: (...args) => handler.onBodySent?.(...args),
             onHeaders: (statusCode, headers, resume, statusText) => {
               // Add rate limit headers
               const rateLimitHeaders = [
@@ -175,19 +186,10 @@ function createRateLimiterInterceptor(options) {
               const combinedHeaders = [...headers, ...rateLimitHeaders];
 
               return handler.onHeaders(statusCode, combinedHeaders, resume, statusText);
-            }
+            },
+            onData: (...args) => handler.onData?.(...args),
+            onComplete: (...args) => handler.onComplete?.(...args)
           };
-
-          // Add optional handler methods if they exist
-          if (handler.onConnect) {
-            wrappedHandler.onConnect = (...args) => handler.onConnect(...args);
-          }
-          if (handler.onUpgrade) {
-            wrappedHandler.onUpgrade = (...args) => handler.onUpgrade(...args);
-          }
-          if (handler.onBodySent) {
-            wrappedHandler.onBodySent = (...args) => handler.onBodySent(...args);
-          }
 
           return dispatch(opts, wrappedHandler);
         }
