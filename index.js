@@ -23,6 +23,8 @@ class RateLimiterInterceptor {
         ttl: options.windowMs * 2 // Keep entries for 2x the window duration
       });
     }
+
+    this.ongoingChecks = new Map(); // Cache for ongoing rate-limiting checks
   }
 
   async getStore() {
@@ -40,25 +42,39 @@ class RateLimiterInterceptor {
   }
 
   async isRateLimited(identifier) {
-    let store = await this.getStore();
-    
-    try {
-      await this.cleanupOldRequests(store, identifier);
-      const count = await store.count(identifier);
-      
-      // Check if adding one more request would exceed the limit
-      const wouldExceedLimit = (count + 1) > this.maxRequests;
-      
-      return wouldExceedLimit;
-    } catch (err) {
-      throw err;
+    // If there's already an ongoing check for this identifier, return the promise
+    if (this.ongoingChecks.has(identifier)) {
+      return this.ongoingChecks.get(identifier);
     }
+
+    // Create and store a new promise for this identifier
+    const rateLimitCheck = new Promise(async (resolve, reject) => {
+      let store = await this.getStore();
+
+      try {
+        await this.cleanupOldRequests(store, identifier);
+        const count = await store.count(identifier);
+
+        // Check if adding one more request would exceed the limit
+        const wouldExceedLimit = (count + 1) > this.maxRequests;
+
+        resolve(wouldExceedLimit);
+      } catch (err) {
+        reject(err);
+      } finally {
+        // Remove the promise from the cache once it resolves or rejects
+        this.ongoingChecks.delete(identifier);
+      }
+    });
+
+    this.ongoingChecks.set(identifier, rateLimitCheck);
+    return rateLimitCheck;
   }
 
   async recordRequest(identifier) {
     const now = Date.now();
     let store = await this.getStore();
-    
+
     try {
       await store.add(now, identifier);
     } catch (err) {
@@ -75,7 +91,7 @@ class RateLimiterInterceptor {
     const method = opts.method;
     const origin = opts.origin;
     const path = opts.path;
-    
+
     return `${method}:${origin}:${path}`;
   }
 
