@@ -125,12 +125,50 @@ identifier: (opts) => {
 }
 ```
 
+### Dynamic Rate Limit Configuration
+
+Both `maxRequests` and `windowMs` can be specified as callback functions to enable dynamic, request-based rate limiting:
+
+```javascript
+identifier: (opts) => {
+  const userId = opts.headers['x-user-id'] || 'anonymous';
+  return `user:${userId}`;
+},
+maxRequests: (opts) => {
+  // Different limits for different endpoints
+  if (opts.path.startsWith('/api/premium')) {
+    return 1000; // Premium endpoints get higher limit
+  }
+  return 100; // Standard limit
+},
+windowMs: (opts) => {
+  // Different time windows for different users
+  const userId = opts.headers['x-user-id'];
+  if (userId === 'vip') {
+    return 3600000; // 1 hour for VIP users
+  }
+  return 60000; // 1 minute for others
+}
+```
+
+**Function Parameter:**
+- `opts` - The request options object containing:
+  - `method` - HTTP method (GET, POST, etc.)
+  - `origin` - Request origin URL
+  - `path` - Request path
+  - `headers` - Request headers object
+  - Other undici request options
+
+The function should return:
+- `maxRequests`: A number representing the maximum requests allowed
+- `windowMs`: A number representing the time window in milliseconds
+
 ### Configuration Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `maxRequests` | number | 100 | Maximum requests allowed per window |
-| `windowMs` | number | 60000 | Time window in milliseconds (1 minute) |
+| `maxRequests` | number \| function | 100 | Maximum requests allowed per window. Can be a number or function that receives opts and returns a number |
+| `windowMs` | number \| function | 60000 | Time window in milliseconds (1 minute). Can be a number or function that receives opts and returns a number |
 | `maxIdentifiers` | number | 10000 | Max unique identifiers to track in memory |
 | `identifier` | function | null | Custom function to extract identifier from request |
 | `onRateLimitExceeded` | function | null | Callback when rate limit is exceeded |
@@ -212,6 +250,44 @@ const client = new Agent().compose(
 );
 ```
 
+### Dynamic Rate Limiting Based on User Tier
+
+```javascript
+const client = new Agent().compose(
+  createRateLimiterInterceptor({
+    identifier: (opts) => {
+      const userId = opts.headers['x-user-id'] || 'anonymous';
+      return `user:${userId}`;
+    },
+    // Dynamic maxRequests based on request path
+    maxRequests: (opts) => {
+      if (opts.path.startsWith('/api/v2/premium')) {
+        return 10000; // Premium endpoints
+      }
+      return 1000; // Standard endpoints
+    },
+    // Dynamic window based on user tier
+    windowMs: (opts) => {
+      const userTier = opts.headers['x-user-tier'];
+      switch (userTier) {
+        case 'enterprise':
+          return 3600000; // 1 hour window
+        case 'pro':
+          return 300000; // 5 minute window
+        default:
+          return 60000; // 1 minute window
+      }
+    },
+    onRateLimitExceeded: (info) => {
+      console.warn(
+        `Rate limit exceeded for ${info.identifier}: ` +
+        `${info.currentRequests} requests in ${info.windowMs}ms window`
+      );
+    }
+  })
+);
+```
+
 ### Global Dispatcher
 
 ```javascript
@@ -270,8 +346,8 @@ const response = await request('https://api.example.com', {
 |--------|------|---------|-------------|
 | `redis` | Redis | - | **Required**. ioredis client instance |
 | `redisKeyPrefix` | string | `'ratelimit:'` | Prefix for Redis keys |
-| `maxRequests` | number | `100` | Maximum requests per window |
-| `windowMs` | number | `60000` | Time window in milliseconds |
+| `maxRequests` | number \| function | `100` | Maximum requests per window. Can be a number or function that receives opts and returns a number |
+| `windowMs` | number \| function | `60000` | Time window in milliseconds. Can be a number or function that receives opts and returns a number |
 | `includeHeaders` | boolean | `true` | Include rate limit headers in responses |
 | `identifier` | function | - | Custom function to extract identifier from request |
 | `onRateLimitExceeded` | function | - | Callback when rate limit is exceeded |
